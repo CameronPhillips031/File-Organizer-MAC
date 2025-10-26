@@ -1,0 +1,84 @@
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
+diff --git a/src/cratesai_pro/settings.py b/src/cratesai_pro/settings.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..b538e22b0ac09da9fcab4e21befa613a513f995e
+--- /dev/null
++++ b/src/cratesai_pro/settings.py
+@@ -0,0 +1,74 @@
++"""Application settings stored in YAML on disk."""
++from __future__ import annotations
++
++import json
++from dataclasses import dataclass
++from copy import deepcopy
++from pathlib import Path
++from typing import Any, Dict
++
++import yaml
++
++DEFAULT_SETTINGS = {
++    "library_path": "",
++    "destination_path": "",
++    "organizer_mode": "copy",  # or "move"
++    "crate_bpm_ranges": {
++        "Warmup": [90, 105],
++        "Groove": [106, 120],
++        "Peak": [121, 135],
++        "Afterhours": [136, 160],
++    },
++    "club_flow_order": ["Warmup", "Peak", "Afterhours"],
++    "theme": "Dark Violet",
++    "discovery": {
++        "spotify_client_id": "",
++        "spotify_client_secret": "",
++        "soundcloud_client_id": "",
++    },
++}
++
++def _deep_update(target: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]:
++    for key, value in updates.items():
++        if isinstance(value, dict) and isinstance(target.get(key), dict):
++            target[key] = _deep_update(dict(target.get(key, {})), value)
++        else:
++            target[key] = value
++    return target
++
++
++@dataclass(slots=True)
++class Settings:
++    """Mutable settings with helpers to load/save YAML."""
++
++    data: Dict[str, Any]
++    path: Path
++
++    @classmethod
++    def load(cls, path: Path) -> "Settings":
++        if path.exists():
++            data = yaml.safe_load(path.read_text())
++            if not isinstance(data, dict):
++                raise ValueError("Settings file is corrupted")
++        else:
++            path.parent.mkdir(parents=True, exist_ok=True)
++            data = deepcopy(DEFAULT_SETTINGS)
++            path.write_text(yaml.safe_dump(data, sort_keys=False))
++        merged = _deep_update(deepcopy(DEFAULT_SETTINGS), data)
++        return cls(data=merged, path=path)
++
++    def save(self) -> None:
++        self.path.parent.mkdir(parents=True, exist_ok=True)
++        with self.path.open("w", encoding="utf-8") as fh:
++            yaml.safe_dump(self.data, fh, sort_keys=False)
++
++    def update(self, **kwargs: Any) -> None:
++        self.data.update(kwargs)
++        self.save()
++
++    def to_json(self) -> str:
++        return json.dumps(self.data, indent=2)
++
++
++def default_settings_path() -> Path:
++    return Path.home() / "CratesAIPro" / "app" / "config" / "settings.yaml"
+ 
+EOF
+) 

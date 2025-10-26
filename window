@@ -1,0 +1,249 @@
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
+diff --git a/src/cratesai_pro/ui/main_window.py b/src/cratesai_pro/ui/main_window.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..97360a4927c526ad854b82664b55f8ebbea972b6
+--- /dev/null
++++ b/src/cratesai_pro/ui/main_window.py
+@@ -0,0 +1,239 @@
++"""Qt GUI for CratesAI Pro."""
++from __future__ import annotations
++
++from dataclasses import dataclass
++from pathlib import Path
++from typing import List
++
++from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
++from PySide6.QtGui import QAction
++from PySide6.QtWidgets import (
++    QFileDialog,
++    QLabel,
++    QMainWindow,
++    QMessageBox,
++    QPushButton,
++    QTableWidget,
++    QTableWidgetItem,
++    QToolBar,
++    QVBoxLayout,
++    QWidget,
++    QProgressBar,
++    QHBoxLayout,
++)
++
++from ..analysis.analyzer import AnalysisEngine
++from ..crates.smart_crates import CrateBuilder
++from ..mashups.suggestions import suggest_mashups
++from ..models import TrackAnalysis
++from ..organizer.organizer import Organizer
++from ..settings import Settings, default_settings_path
++
++
++@dataclass(slots=True)
++class _AnalysisRequest:
++    paths: List[Path]
++
++
++class _AnalysisSignals(QObject):
++    progress = Signal(int, int)
++    analyzed = Signal(object)
++    finished = Signal()
++    failed = Signal(str)
++
++
++class _AnalysisWorker(QRunnable):
++    def __init__(self, engine: AnalysisEngine, request: _AnalysisRequest) -> None:
++        super().__init__()
++        self.engine = engine
++        self.request = request
++        self.signals = _AnalysisSignals()
++
++    def run(self) -> None:  # pragma: no cover - executed in Qt thread
++        try:
++            total = len(self.request.paths)
++            for index, path in enumerate(self.request.paths, start=1):
++                analysis = self.engine.analyze(path)
++                self.signals.analyzed.emit(analysis)
++                self.signals.progress.emit(index, total)
++            self.signals.finished.emit()
++        except Exception as exc:  # pragma: no cover - debug surface
++            self.signals.failed.emit(str(exc))
++
++
++class MainWindow(QMainWindow):
++    """Primary Qt window that orchestrates user workflows."""
++
++    def __init__(self) -> None:
++        super().__init__()
++        self.setWindowTitle("CratesAI Pro")
++        self.resize(1100, 720)
++
++        self.settings = Settings.load(default_settings_path())
++        self.analysis_engine = AnalysisEngine()
++        self.thread_pool = QThreadPool.globalInstance()
++        self.analyzed_tracks: list[TrackAnalysis] = []
++
++        self._build_ui()
++
++    # UI construction -------------------------------------------------
++    def _build_ui(self) -> None:
++        central = QWidget(self)
++        layout = QVBoxLayout(central)
++
++        toolbar = self._build_toolbar()
++        self.addToolBar(Qt.TopToolBarArea, toolbar)
++
++        self.status_label = QLabel("Select a folder to begin.")
++        layout.addWidget(self.status_label)
++
++        self.table = QTableWidget(0, 8)
++        self.table.setHorizontalHeaderLabels(
++            ["Title", "Artist", "Genre", "BPM", "Key", "Camelot", "Energy", "Duration"]
++        )
++        self.table.horizontalHeader().setStretchLastSection(True)
++        layout.addWidget(self.table)
++
++        controls = QHBoxLayout()
++        self.analyze_button = QPushButton("Analyze")
++        self.analyze_button.clicked.connect(self._trigger_analysis)
++        controls.addWidget(self.analyze_button)
++
++        self.organize_button = QPushButton("Organize Library")
++        self.organize_button.clicked.connect(self._organize_library)
++        controls.addWidget(self.organize_button)
++
++        self.crates_button = QPushButton("Export Smart Crates")
++        self.crates_button.clicked.connect(self._export_crates)
++        controls.addWidget(self.crates_button)
++
++        self.mashup_button = QPushButton("Suggest Mashups")
++        self.mashup_button.clicked.connect(self._suggest_mashups)
++        controls.addWidget(self.mashup_button)
++
++        layout.addLayout(controls)
++
++        self.progress = QProgressBar()
++        self.progress.setRange(0, 100)
++        self.progress.hide()
++        layout.addWidget(self.progress)
++
++        self.setCentralWidget(central)
++
++    def _build_toolbar(self) -> QToolBar:
++        toolbar = QToolBar("Main Toolbar", self)
++        toolbar.setMovable(False)
++
++        open_action = QAction("Open Folder", self)
++        open_action.triggered.connect(self._choose_folder)
++        toolbar.addAction(open_action)
++
++        reload_action = QAction("Reload Settings", self)
++        reload_action.triggered.connect(self._reload_settings)
++        toolbar.addAction(reload_action)
++
++        return toolbar
++
++    # Slots -----------------------------------------------------------
++    def _choose_folder(self) -> None:
++        folder = QFileDialog.getExistingDirectory(self, "Select Music Folder", self.settings.data["library_path"])
++        if folder:
++            self.settings.update(library_path=folder)
++            self.status_label.setText(f"Library: {folder}")
++
++    def _reload_settings(self) -> None:
++        self.settings = Settings.load(default_settings_path())
++        self.status_label.setText("Settings reloaded from disk.")
++
++    def _trigger_analysis(self) -> None:
++        folder = self.settings.data.get("library_path")
++        if not folder:
++            QMessageBox.warning(self, "No folder", "Please select a library folder first.")
++            return
++        paths = self.analysis_engine.discover_tracks(Path(folder))
++        if not paths:
++            QMessageBox.information(self, "No tracks", "No supported audio files were found.")
++            return
++        self.table.setRowCount(0)
++        self.analyzed_tracks.clear()
++        self.progress.show()
++        self.progress.setValue(0)
++        worker = _AnalysisWorker(self.analysis_engine, _AnalysisRequest(paths=paths))
++        worker.signals.analyzed.connect(self._add_track)
++        worker.signals.progress.connect(self._update_progress)
++        worker.signals.finished.connect(self._analysis_finished)
++        worker.signals.failed.connect(self._analysis_failed)
++        self.thread_pool.start(worker)
++
++    def _add_track(self, analysis: TrackAnalysis) -> None:
++        row = self.table.rowCount()
++        self.table.insertRow(row)
++        self.table.setItem(row, 0, QTableWidgetItem(analysis.title))
++        self.table.setItem(row, 1, QTableWidgetItem(analysis.artist))
++        self.table.setItem(row, 2, QTableWidgetItem(analysis.genre or ""))
++        self.table.setItem(row, 3, QTableWidgetItem(f"{analysis.bpm:.1f}"))
++        self.table.setItem(row, 4, QTableWidgetItem(analysis.key))
++        self.table.setItem(row, 5, QTableWidgetItem(analysis.camelot))
++        self.table.setItem(row, 6, QTableWidgetItem(f"{analysis.energy:.1f}"))
++        self.table.setItem(row, 7, QTableWidgetItem(f"{analysis.duration:.1f}"))
++        self.analyzed_tracks.append(analysis)
++
++    def _update_progress(self, index: int, total: int) -> None:
++        percent = int((index / total) * 100)
++        self.progress.setValue(percent)
++        self.status_label.setText(f"Analyzed {index}/{total} tracks")
++
++    def _analysis_finished(self) -> None:
++        self.status_label.setText("Analysis complete.")
++        self.progress.hide()
++
++    def _analysis_failed(self, message: str) -> None:
++        self.progress.hide()
++        QMessageBox.critical(self, "Analysis failed", message)
++
++    def _organize_library(self) -> None:
++        if not self.analyzed_tracks:
++            QMessageBox.information(self, "No tracks", "Run an analysis first.")
++            return
++        destination = self.settings.data.get("destination_path")
++        if not destination:
++            destination = QFileDialog.getExistingDirectory(self, "Select Destination Folder", str(Path.home()))
++            if not destination:
++                return
++            self.settings.update(destination_path=destination)
++        mode = self.settings.data.get("organizer_mode", "copy")
++        organizer = Organizer(Path(destination), mode)
++        organizer.organize(self.analyzed_tracks)
++        QMessageBox.information(self, "Organizer", "Tracks organized successfully.")
++
++    def _export_crates(self) -> None:
++        if not self.analyzed_tracks:
++            QMessageBox.information(self, "No tracks", "Run an analysis first.")
++            return
++        folder = QFileDialog.getExistingDirectory(self, "Select Crates Output Folder", str(Path.home()))
++        if not folder:
++            return
++        builder = CrateBuilder(Path(folder))
++        builder.by_genre(self.analyzed_tracks)
++        builder.by_camelot(self.analyzed_tracks)
++        bpm_ranges = {
++            name: tuple(value)
++            for name, value in self.settings.data.get("crate_bpm_ranges", {}).items()
++        }
++        builder.by_bpm_range(self.analyzed_tracks, bpm_ranges)
++        builder.club_flow(self.analyzed_tracks, self.settings.data.get("club_flow_order", []))
++        QMessageBox.information(self, "Smart Crates", "Crates exported to selected folder.")
++
++    def _suggest_mashups(self) -> None:
++        if not self.analyzed_tracks:
++            QMessageBox.information(self, "No tracks", "Run an analysis first.")
++            return
++        suggestions = suggest_mashups(self.analyzed_tracks)
++        if not suggestions:
++            QMessageBox.information(self, "Mashup Ideas", "No compatible matches found yet.")
++            return
++        lines = []
++        for suggestion in suggestions:
++            matches = ", ".join(match.display_name for match in suggestion.matches[:5])
++            lines.append(f"{suggestion.base_track.display_name}: {matches}")
++        QMessageBox.information(self, "Mashup Ideas", "\n".join(lines))
+ 
+EOF
+) 

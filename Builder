@@ -1,0 +1,13 @@
+
+---
+
+## 🧱 Build Instructions
+
+```bash
+# Create virtual env
+python3.11 -m venv .venv311
+source .venv311/bin/activate
+pip install -r requirements.txt
+
+# Build macOS app
+bash build_app.sh

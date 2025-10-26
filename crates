@@ -1,0 +1,29 @@
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
+diff --git a/src/cratesai_pro/app.py b/src/cratesai_pro/app.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..f7236d1ad5e5c2a120035c79369398005e76079a
+--- /dev/null
++++ b/src/cratesai_pro/app.py
+@@ -0,0 +1,19 @@
++"""Entry point for launching the CratesAI Pro GUI."""
++from __future__ import annotations
++
++import sys
++
++from PySide6.QtWidgets import QApplication
++
++from .ui.main_window import MainWindow
++
++
++def main() -> int:
++    app = QApplication(sys.argv)
++    window = MainWindow()
++    window.show()
++    return app.exec()
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+ 
+EOF
+)

@@ -1,0 +1,12 @@
+numpy<2
+scipy<2
+numba==0.59.1
+resampy==0.4.2
+librosa==0.10.1
+PySide6==6.6.3.1
+pyinstaller==6.6.0
+pyloudnorm
+soundfile
+audioread
+mutagen
+pyyaml

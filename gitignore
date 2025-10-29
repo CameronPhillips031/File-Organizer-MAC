@@ -1,0 +1,11 @@
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 0000000000000000000000000000000000000000..f98f1b007613ef6483484b81d56c00acff9d2c7d
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1 @@
++.asdf/
+ 
+EOF
+)
